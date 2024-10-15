@@ -2,11 +2,14 @@ import argparse
 
 import numpy     as np
 import jax.numpy as jnp
+import pickle
+
 import matplotlib
 matplotlib.use("TkAgg")
-
 from matplotlib import pyplot as plt
-from jax        import jacfwd, jacrev #!TODO: compare numerical results from between these two
+from datetime   import datetime
+
+from utils import Lyapunov, entropy, dim
 
 #####################################
 #           DOCUMENTATION           #
@@ -55,105 +58,6 @@ Plots spectrum as in Engelken et al 2023
 Figures saved to 'figures/' folder, titled with model type, activation type, gain, and tau parameters
 """
 
-#####################################
-#              CLASSES              #
-#####################################
-
-class Lyapunov():
-
-    def __init__(self, f : callable, h_0 : np.ndarray):
-        """
-        STATE VARIABLES
-        f   := function over which Lyapunov simulations will be done
-                callable
-        h   := initial state to be evolved by f
-                (N, ) np.ndarray
-        Jac := differential Df function \R^n -> \R^n
-                Callable
-        """
-
-        self.fn  = f
-        self.Jac = jacfwd(f) 
-        self.h   = h_0
-
-    def set_h(self, h):
-        self.h = h
-
-    def set_J(self, Jac):
-        self.Jac = Jac
-
-    def evolve(self, t_sim : float, delta_t : float):
-        """
-        Evolves h from time t to time t + t_sim with timesteps of delta_t
-
-        INPUTS
-            t_sim   := total amount of elapsed time desired
-            delta_t := time interval for each step taken
-
-        OUTPUTS
-            none
-
-        CLASS VARIABLE CHANGES
-            self.h  := updated to h_{t_sim} along discrete intervals of delta_t
-        """
-        s_sim   = int(t_sim/delta_t)
-        for i in range(s_sim):
-            self.h = self.fn(self.h)
-            D      = self.Jac(self.h)
-
-    def get_spectra(self, m : int, s_ons : int = 1, t_sim : float = 100, delta_t : float = 0.1):
-        """
-        Calculate the first m Lyapunov exponents via reorthnormalization procedure (Benettin et al 1980)
-            Procedure detailed in Supplemental of Engelken et al 2023: https://journals.aps.org/prresearch/supplemental/10.1103/PhysRevResearch.5.043044/supplement02.pdf
-
-        INPUTS                        
-            m       := desired number of Lyapunov exponents from the reorthnormalization procedure
-                        int, default value of 10
-            s_ons   := number of cycles between each QR-decomposition, equal to t_ONS/delta_T
-                        int, default value of 1
-            t_sim   := total time of the simulation
-                        float, default value of 10
-            delta_t := time interval between each call of self.fn
-                        float, default value of 0.1
-
-        OUTPUTS
-            spectra := spectrum of the first m Lyapunov spectra sorted from largest to smallest value
-                        list, len(spectra) == m
-            k       := characteristic condition number
-
-        CLASS VARIABLE CHANGES
-            self.spectra := spectra
-        """
-
-        # LOOPING
-        spectra = [0]*m
-        s_sim   = int(t_sim/delta_t)
-
-        h    = self.h
-        Q, R = np.linalg.qr(np.random.randn(len(h), m)) # initialization of Q
-
-        for s in range(s_sim):
-            h = self.fn(h)
-            D = self.Jac(h)
-            Q = D @ Q
-
-            if s % s_ons == 0:
-                Q, R = np.linalg.qr(Q)
-                for i in range(m):
-                    spectra[i] += np.log(abs(R[i][i]))
-                
-        k = abs(R[0][0]/R[m - 1][m - 1]) # characteristic number from the last step in the ONS trials
-
-        spectra.sort(reverse = True)
-        spectra = np.array(spectra)
-        spectra /= t_sim
-        return spectra, k
-
-#####################################
-#            REPRODUCING            #
-#             ENGELKAN              #
-#####################################
-
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train a classification model on tiled methane data.")
@@ -176,7 +80,9 @@ if __name__ == "__main__":
                                             default=1,
                                             help="Rate-time constant")
 
-    args = parser.parse_args()
+    args     = parser.parse_args()
+    expname  = f"cls_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    expname += f"_{args.fn}_{args.phi}_gain_{args.g}_tau_{args.tau}"
 
     ############################################### SETUP ###############################################
     N           = args.N
@@ -225,8 +131,9 @@ if __name__ == "__main__":
     if args.fn  == 'single_sompo':
         fn  = rnn
 
-    ########################################### SIMULATION ###########################################
-
+    ######################################
+    #             SIMULATION             #
+    ######################################
     L = Lyapunov(f = fn, h_0 = h) # initialization
     L.evolve(t_sim = t_transient, delta_t = delta_t) # evolve to a point where the system is on a transient
     h_0 = L.h # save model parameters
@@ -235,11 +142,24 @@ if __name__ == "__main__":
     spec, k = L.get_spectra(m = N, s_ons = int(tau/delta_t), delta_t = delta_t)
     s_ons = int((np.log(k)/(spec[0] - spec[-1]))/delta_t) + 1
 
-    # Run full simulation + plot results
+    # Run full simulation to get spectra
     spec, _ = L.get_spectra(m = N, s_ons = s_ons, t_sim = t_sim, delta_t = delta_t)
-    m       = len(spec)
+    m       = len(spec)     # size of the spectrum we get
+    h       = entropy(spec) # entropy
+    d       = dim(spec)     # attractor dimensionality
 
-    ###########################################$ PLOTTING ############################################
+    data = {'spec' : spec,
+            'fn'   : args.fn,
+            'gain' : args.g,
+            'tau'  : args.tau,
+            'entropy' : h,
+            'dimension' : d}
+    with open(f'data/metadata_{expname}.pickle', 'wb') as f: # save metadata from this runtime
+        pickle.dump(data, f)
+
+    ######################################
+    #              PLOTTING              #
+    ######################################
 
     fig, ax = plt.subplots()
     x_axis  = np.arange(m)/m
@@ -248,7 +168,7 @@ if __name__ == "__main__":
 
     plt.xlabel("i/N")
     plt.ylabel("Value of Lyapunov exponent")
-    ax.set_title(f"Lyapunov spectra of {args.fn} system using {args.phi} neurons and g={args.g}")
+    ax.set_title(f"Lyapunov spectra of {expname}")
     
-    fig.savefig(f'figures/spectra_{args.fn}_{args.phi}_gain_{args.g}_tau_{args.tau}.png')
+    fig.savefig(f'figures/spectra_{expname}.png')
     plt.show(block = True)
