@@ -119,7 +119,7 @@ def dim(spec) -> float:
 
     # find k
     for i in range(len(spec)):
-        if k + spec[i] < 0:
+        if sum + spec[i] < 0:
             break
         else:
             k += 1
