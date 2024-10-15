@@ -1,7 +1,10 @@
 import argparse
+import os
+import os.path      as op
 
 import numpy     as np
 import jax.numpy as jnp
+import pathlib
 import pickle
 
 import matplotlib
@@ -81,7 +84,8 @@ if __name__ == "__main__":
                                             help="Rate-time constant")
 
     args     = parser.parse_args()
-    expname  = f"cls_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    cur_dir  = os.path.dirname(__file__)
+    expname  = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     expname += f"_{args.fn}_{args.phi}_gain_{args.g}_tau_{args.tau}"
 
     ############################################### SETUP ###############################################
@@ -148,13 +152,16 @@ if __name__ == "__main__":
     h       = entropy(spec) # entropy
     d       = dim(spec)     # attractor dimensionality
 
+    # Save metadata for collation and use in other plots
     data = {'spec' : spec,
             'fn'   : args.fn,
             'gain' : args.g,
             'tau'  : args.tau,
             'entropy' : h,
             'dimension' : d}
-    with open(f'data/metadata_{expname}.pickle', 'wb') as f: # save metadata from this runtime
+    filename = op.join(cur_dir, 'data/', f'metadata_{expname}.pickle')
+    os.makedirs(op.dirname(filename), exist_ok=True)
+    with open(filename, "wb") as f:
         pickle.dump(data, f)
 
     ######################################
@@ -169,6 +176,7 @@ if __name__ == "__main__":
     plt.xlabel("i/N")
     plt.ylabel("Value of Lyapunov exponent")
     ax.set_title(f"Lyapunov spectra of {expname}")
-    
-    fig.savefig(f'figures/spectra_{expname}.png')
+
+    # Save and show figure    
+    fig.savefig(op.join(cur_dir, 'figures/', f'spectra_{expname}.png'), dpi = 300)
     plt.show(block = True)
